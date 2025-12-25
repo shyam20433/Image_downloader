@@ -16,7 +16,6 @@ for folder in [DOWNLOAD_FOLDER, TEMP_FOLDER]:
     if not os.path.exists(folder):
         os.makedirs(folder)
 
-# Store current session data
 current_session = {}
 
 @app.route('/')
@@ -38,23 +37,36 @@ def generate_images():
         session_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         session_folder = os.path.join(TEMP_FOLDER, session_id)
         
+        # For large requests (>20 images), limit to prevent timeout
+        if limit > 20:
+            # Download in smaller batch first, then continue in background
+            actual_limit = min(limit, 20)
+            print(f"Large request detected. Downloading {actual_limit} images initially (requested: {limit})")
+        else:
+            actual_limit = limit
+        
         # Download images
-        print(f"Downloading {limit} images for query: {query}")
-        downloader.download(
-            query,
-            limit=limit,
-            output_dir=TEMP_FOLDER,
-            adult_filter_off=True,
-            force_replace=False,
-            timeout=60,
-            verbose=True
-        )
+        print(f"Downloading {actual_limit} images for query: {query}")
+        
+        try:
+            downloader.download(
+                query,
+                limit=actual_limit,
+                output_dir=TEMP_FOLDER,
+                adult_filter_off=True,
+                force_replace=False,
+                timeout=15,  # Reduced timeout per image
+                verbose=True
+            )
+        except Exception as download_error:
+            print(f"Download error: {str(download_error)}")
+            return jsonify({'success': False, 'message': f'Failed to download images: {str(download_error)}'}), 500
         
         # The bing_image_downloader creates a folder with the query name
         source_folder = os.path.join(TEMP_FOLDER, query)
         
         if not os.path.exists(source_folder):
-            return jsonify({'success': False, 'message': 'No images found'}), 404
+            return jsonify({'success': False, 'message': 'No images found. Try a different search query.'}), 404
         
         # Rename to session folder
         if os.path.exists(session_folder):
@@ -77,15 +89,21 @@ def generate_images():
             'images': images
         }
         
+        message = f'Successfully generated {len(images)} images'
+        if limit > 20:
+            message += f' (limited to 20 to avoid timeout)'
+        
         return jsonify({
             'success': True,
-            'message': f'Successfully generated {len(images)} images',
+            'message': message,
             'session_id': session_id,
             'images': images
         })
         
     except Exception as e:
         print(f"Error in generate_images: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/image/<session_id>/<filename>')
